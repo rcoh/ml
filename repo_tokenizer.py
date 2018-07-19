@@ -12,6 +12,8 @@ STOP = special_prefix + 'stop'
 SPACE = special_prefix + 'spc'
 UNKNOWN_REPO_NAME = special_prefix + 'unkrn'
 
+IGNORE_FOLDERS = ['.git']
+
 def break_on(s: str, toks: List[str]):
     substr = ''
     res = []
@@ -82,6 +84,8 @@ def tokenize_folder(path: Path, repo_root: Path):
     res = folder_header(path.relative_to(repo_root))
     dirs = []
     for f in path.iterdir():
+        if f.name in IGNORE_FOLDERS:
+            continue
         if f.is_dir():
             dirs.append(f)
         else:
