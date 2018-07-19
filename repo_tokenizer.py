@@ -17,20 +17,25 @@ IGNORE_FOLDERS = ['.git']
 def break_on(s: str, toks: List[str]):
     substr = ''
     res = []
+    if type(s) == bytes:
+        s = s.decode('utf-8')
+
     for c in s:
-        if s in toks:
+        if c in toks:
             if substr:
                 res.append(substr)
                 substr = ''
             res.append(c)
         else:
             substr += c
+    if substr:
+        res.append(substr)
     return res
 
 
 
 def breakup_path(path: str):
-    return break_on(path, ['/'])
+    return break_on(path, ['/', '.'])
 
 def breakup_identifiers(word: str):
     if word.startswith(special_prefix):
@@ -74,7 +79,12 @@ def folder_header(path: Path):
     return [START_FOLDER, *breakup_path(path.as_posix()), STOP]
 
 def tokenize_file(path: Path, repo_root: Path):
-    text = path.read_text()
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError:
+        print(f'Failed to processes {path}')
+        return []
+        
     lexed = lex(text)
     tokenized = sum([breakup_identifiers(word) for word in lexed], [])
     return [*file_header(path, repo_root), *tokenized]
@@ -97,7 +107,7 @@ def tokenize_folder(path: Path, repo_root: Path):
 def tokenize_repo(repo_name: Optional[str], repo_path: Path):
     if repo_name is None:
         repo_name = UNKNOWN_REPO_NAME
-    header = [START_REPO, repo_name, STOP]
+    header = [START_REPO, *break_on(repo_name, ['-', '/']), STOP]
     return [*header, *tokenize_folder(repo_path, repo_path)]
 
 def read_until(iter, tok):
