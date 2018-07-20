@@ -2,6 +2,9 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 import click
+from itertools import groupby
+
+EXTENSION_WHITELIST = ['.js', '.md', '.json']
 
 special_prefix = '~!~$'
 START_REPO = special_prefix + 'start_repo'
@@ -11,8 +14,10 @@ ALL_CAPS = special_prefix + 'all_caps'
 STOP = special_prefix + 'stop'
 SPACE = special_prefix + 'spc'
 UNKNOWN_REPO_NAME = special_prefix + 'unkrn'
+DROP_CONSEC_SPACES = True
 
 IGNORE_FOLDERS = ['.git']
+
 
 def break_on(s: str, toks: List[str]):
     substr = ''
@@ -33,9 +38,9 @@ def break_on(s: str, toks: List[str]):
     return res
 
 
-
 def breakup_path(path: str):
     return break_on(path, ['/', '.'])
+
 
 def breakup_identifiers(word: str):
     if word.startswith(special_prefix):
@@ -57,6 +62,7 @@ def breakup_identifiers(word: str):
         subwords.insert(0, ALL_CAPS)
     return subwords
 
+
 def lex(text: str):
     tokens = []
     current_token = ''
@@ -70,13 +76,24 @@ def lex(text: str):
             current_token += char
     if current_token:
         tokens.append(current_token)
-    return [SPACE if tok.isspace() else tok for tok in tokens]
+    lexed = [SPACE if tok.isspace() else tok for tok in tokens]
+    final = []
+    last = None
+    for tok in lexed:
+        if tok == SPACE and last == SPACE:
+            continue
+        last = tok
+        final.append(tok)
+    return final
+
 
 def file_header(path: Path, repo_root):
     return [START_FILE, *breakup_path(path.relative_to(repo_root).as_posix()), STOP]
 
+
 def folder_header(path: Path):
     return [START_FOLDER, *breakup_path(path.as_posix()), STOP]
+
 
 def tokenize_file(path: Path, repo_root: Path):
     try:
@@ -92,6 +109,7 @@ def tokenize_text(text: str):
     lexed = lex(text)
     return sum([breakup_identifiers(word) for word in lexed], [])
 
+
 def tokenize_folder(path: Path, repo_root: Path):
     assert path.is_dir()
     res = folder_header(path.relative_to(repo_root))
@@ -101,17 +119,21 @@ def tokenize_folder(path: Path, repo_root: Path):
             continue
         if f.is_dir():
             dirs.append(f)
-        else:
+        elif f.suffix in EXTENSION_WHITELIST:
             res.extend(tokenize_file(f, repo_root))
+        else:
+            print('ignoring ', f.name, f.suffix)
     for dir in dirs:
         res.extend(tokenize_folder(dir, repo_root))
     return res
+
 
 def tokenize_repo(repo_name: Optional[str], repo_path: Path):
     if repo_name is None:
         repo_name = UNKNOWN_REPO_NAME
     header = [START_REPO, *break_on(repo_name, ['-', '/']), STOP]
     return [*header, *tokenize_folder(repo_path, repo_path)]
+
 
 def read_until(iter, tok):
     res = []
@@ -120,6 +142,7 @@ def read_until(iter, tok):
         res.append(t)
         t = next(iter)
     return res
+
 
 def handle_special(tok, itr):
     special = next(itr)
