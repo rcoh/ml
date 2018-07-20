@@ -81,13 +81,16 @@ def folder_header(path: Path):
 def tokenize_file(path: Path, repo_root: Path):
     try:
         text = path.read_text()
+        tokenized = tokenize_text(text)
+        return [*file_header(path, repo_root), *tokenized]
+
     except UnicodeDecodeError:
         print(f'Failed to processes {path}')
         return []
-        
+
+def tokenize_text(text: str):
     lexed = lex(text)
-    tokenized = sum([breakup_identifiers(word) for word in lexed], [])
-    return [*file_header(path, repo_root), *tokenized]
+    return sum([breakup_identifiers(word) for word in lexed], [])
 
 def tokenize_folder(path: Path, repo_root: Path):
     assert path.is_dir()
