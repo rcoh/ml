@@ -1,8 +1,10 @@
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable
+
 import click
-from itertools import groupby
+import esprima
+from esprima.tokenizer import BufferEntry
 
 EXTENSION_WHITELIST = ['.js', '.md', '.json']
 
@@ -95,43 +97,6 @@ def folder_header(path: Path):
     return [START_FOLDER, *breakup_path(path.as_posix()), STOP]
 
 
-def tokenize_file(path: Path, repo_root: Path):
-    try:
-        text = path.read_text()
-    except UnicodeDecodeError:
-        print(f'Failed to processes {path}')
-        return []
-
-    lexed = lex(text)
-    tokenized = sum([breakup_identifiers(word) for word in lexed], [])
-    return [*file_header(path, repo_root), *tokenized]
-
-
-def tokenize_folder(path: Path, repo_root: Path):
-    assert path.is_dir()
-    res = folder_header(path.relative_to(repo_root))
-    dirs = []
-    for f in path.iterdir():
-        if f.name in IGNORE_FOLDERS:
-            continue
-        if f.is_dir():
-            dirs.append(f)
-        elif f.suffix in EXTENSION_WHITELIST:
-            res.extend(tokenize_file(f, repo_root))
-        else:
-            print('ignoring ', f.name, f.suffix)
-    for dir in dirs:
-        res.extend(tokenize_folder(dir, repo_root))
-    return res
-
-
-def tokenize_repo(repo_name: Optional[str], repo_path: Path):
-    if repo_name is None:
-        repo_name = UNKNOWN_REPO_NAME
-    header = [START_REPO, *break_on(repo_name, ['-', '/']), STOP]
-    return [*header, *tokenize_folder(repo_path, repo_path)]
-
-
 def read_until(iter, tok):
     res = []
     t = next(iter)
@@ -165,12 +130,93 @@ def reverse_tokenize(stream):
             return target_dir
 
 
-@click.command('')
+def flatten(l: List[List[str]]):
+    return [item for sublist in l for item in sublist]
+
+
+def tokenizer_v1(code: str) -> List[str]:
+    lexed = lex(code)
+    return flatten([breakup_identifiers(w) for w in lexed])
+
+
+def tokenizer_esprima(code: str) -> List[str]:
+    tokens = esprima.tokenize(code)
+
+    def subtok(token: BufferEntry):
+        if token.type == 'String':
+            content = token.value.strip('\'"')
+            return ['"', *content.split(' '), '"']
+        else:
+            return [token.value]
+
+    return flatten([subtok(t) for t in tokens])
+
+
+class RepoTokenizer:
+    def __init__(self, code_tokenizer: Callable[[str], List[str]], file_filter=Callable[[Path], bool]):
+        self.tokenizer = code_tokenizer
+        self.file_filter = file_filter
+
+    def tokenize(self, repo_path: Path, repo_name: Optional[str] = None):
+        if repo_name is None:
+            repo_name = UNKNOWN_REPO_NAME
+        header = [START_REPO, *break_on(repo_name, ['-', '/']), STOP]
+        return [*header, *self.tokenize_folder(repo_path, repo_path)]
+
+    def tokenize_folder(self, path: Path, repo_root: Path):
+        assert path.is_dir()
+        res = folder_header(path.relative_to(repo_root))
+        dirs = []
+        for f in path.iterdir():
+            if f.name in IGNORE_FOLDERS:
+                continue
+            if f.is_dir():
+                dirs.append(f)
+            elif self.file_filter(f):
+                res.extend(self.tokenize_file(f, repo_root))
+            else:
+                pass
+        for dir in dirs:
+            res.extend(self.tokenize_folder(dir, repo_root))
+        return res
+
+    def tokenize_file(self, path: Path, repo_root: Path):
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            print(f'Failed to processes {path}')
+            return []
+        tokenized = self.tokenizer(text)
+        return [*file_header(path, repo_root), *tokenized]
+
+
+def file_filter(extensions):
+    def result(path: Path):
+        return path.suffix in extensions
+
+    return result
+
+
+TokenizerV1OnlyJs = RepoTokenizer(code_tokenizer=tokenizer_v1, file_filter=file_filter(['.js']))
+TokenizerEsprima = RepoTokenizer(code_tokenizer=tokenizer_esprima, file_filter=file_filter(['.js']))
+
+ESPRIMA = 'esprima'
+ORIGINAL = 'original'
+
+TOK_MAP = {
+    ESPRIMA: TokenizerEsprima,
+    ORIGINAL: TokenizerV1OnlyJs
+}
+
+
+@click.command()
 @click.argument('repo-path', type=click.Path(exists=True, file_okay=True, dir_okay=True))
 @click.option('--repo-name')
-def main(repo_path: str, repo_name: str):
+@click.option('--tokenizer', type=click.Choice([ESPRIMA, ORIGINAL]), default=ESPRIMA)
+def main(repo_path: str, repo_name: str, tokenizer: str):
     repo_path = Path(repo_path)
-    click.secho(' '.join(tokenize_repo(repo_name, repo_path)))
+    repo_tokenizer = TOK_MAP[tokenizer]
+    click.secho(' '.join(repo_tokenizer.tokenize(repo_path, repo_name)))
 
 
 if __name__ == "__main__":
